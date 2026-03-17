@@ -74,11 +74,9 @@ Configure at `~/.config/opencode/opencode-mem.jsonc`:
 
   "autoCaptureEnabled": true,
   "autoCaptureLanguage": "auto",
-  "memoryProvider": "openai-chat",
-  "memoryModel": "gpt-4o-mini",
-  "memoryApiUrl": "https://api.openai.com/v1",
-  "memoryApiKey": "sk-...",
-  "memoryTemperature": 0.3,
+
+  "opencodeProvider": "anthropic",
+  "opencodeModel": "claude-haiku-4-5-20251001",
 
   "showAutoCaptureToasts": true,
   "showUserProfileToasts": true,
@@ -99,6 +97,28 @@ Configure at `~/.config/opencode/opencode-mem.jsonc`:
     "injectOn": "first",
   },
 }
+```
+
+### Auto-Capture AI Provider
+
+**Recommended:** Use opencode's built-in providers (no separate API key needed):
+
+```jsonc
+"opencodeProvider": "anthropic",
+"opencodeModel": "claude-haiku-4-5-20251001",
+```
+
+This leverages your existing opencode authentication (OAuth or API key). Works with Claude Pro/Max plans via OAuth - no individual API keys required.
+
+Supported providers: `anthropic`, `openai`
+
+**Fallback:** Manual API configuration (if not using opencodeProvider):
+
+```jsonc
+"memoryProvider": "openai-chat",
+"memoryModel": "gpt-4o-mini",
+"memoryApiUrl": "https://api.openai.com/v1",
+"memoryApiKey": "sk-...",
 ```
 
 **API Key Formats:**
