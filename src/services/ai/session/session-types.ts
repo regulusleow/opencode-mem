@@ -12,6 +12,7 @@ export interface AIMessage {
     function: { name: string; arguments: string };
   }>;
   toolCallId?: string;
+  reasoningContent?: string;
   contentBlocks?: Array<{
     type: string;
     [key: string]: any;

@@ -14,6 +14,7 @@ interface ToolCallResponse {
   choices: Array<{
     message: {
       content?: string | null;
+      reasoning_content?: string | null;
       tool_calls?: Array<{
         id: string;
         type: "function";
@@ -30,6 +31,7 @@ interface ToolCallResponse {
 type APIMessage = {
   role: AIMessage["role"];
   content: string | null;
+  reasoning_content?: string;
   tool_calls?: ToolCallResponse["choices"][number]["message"]["tool_calls"];
   tool_call_id?: string;
 };
@@ -63,8 +65,19 @@ function hasNonEmptyChoices(data: unknown): data is ToolCallResponse {
   if (typeof first !== "object" || first === null) return false;
   if (typeof first.message !== "object" || first.message === null) return false;
 
-  const { content, tool_calls } = first.message as { content?: unknown; tool_calls?: unknown };
+  const { content, reasoning_content, tool_calls } = first.message as {
+    content?: unknown;
+    reasoning_content?: unknown;
+    tool_calls?: unknown;
+  };
   if (content !== undefined && content !== null && typeof content !== "string") return false;
+  if (
+    reasoning_content !== undefined &&
+    reasoning_content !== null &&
+    typeof reasoning_content !== "string"
+  ) {
+    return false;
+  }
   if (tool_calls !== undefined && !Array.isArray(tool_calls)) return false;
 
   return true;
@@ -133,7 +146,7 @@ export class OpenAIChatCompletionProvider extends BaseAIProvider {
 
         if (toolCallIds.size === 0) {
           result.push(msg);
-          toolResponses.forEach((tr) => result.push(tr));
+          result.push(...toolResponses);
           i = j;
         } else {
           break;
@@ -179,6 +192,10 @@ export class OpenAIChatCompletionProvider extends BaseAIProvider {
 
       if (msg.toolCallId) {
         apiMsg.tool_call_id = msg.toolCallId;
+      }
+
+      if (msg.reasoningContent !== undefined && msg.role === "assistant") {
+        apiMsg.reasoning_content = msg.reasoningContent;
       }
 
       messages.push(apiMsg);
@@ -330,16 +347,32 @@ export class OpenAIChatCompletionProvider extends BaseAIProvider {
           content: choice.message.content ?? "",
         };
 
+        if (
+          choice.message.reasoning_content !== undefined &&
+          choice.message.reasoning_content !== null
+        ) {
+          assistantMsg.reasoningContent = choice.message.reasoning_content;
+        }
+
         if (choice.message.tool_calls) {
           assistantMsg.toolCalls = choice.message.tool_calls;
         }
 
         this.aiSessionManager.addMessage(assistantMsg);
-        messages.push({
+        const apiAssistantMsg: APIMessage = {
           role: "assistant",
           content: choice.message.content ?? null,
           tool_calls: choice.message.tool_calls,
-        });
+        };
+
+        if (
+          choice.message.reasoning_content !== undefined &&
+          choice.message.reasoning_content !== null
+        ) {
+          apiAssistantMsg.reasoning_content = choice.message.reasoning_content;
+        }
+
+        messages.push(apiAssistantMsg);
 
         if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
           for (const toolCall of choice.message.tool_calls) {

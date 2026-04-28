@@ -9,6 +9,7 @@ import type {
 } from "./session-types.js";
 import { connectionManager } from "../../sqlite/connection-manager.js";
 import { CONFIG } from "../../../config.js";
+import { log } from "../../logger.js";
 
 const Database = getDatabase();
 type DatabaseType = typeof Database.prototype;
@@ -54,6 +55,7 @@ export class AISessionManager {
         content TEXT NOT NULL,
         tool_calls TEXT,
         tool_call_id TEXT,
+        reasoning_content TEXT,
         content_blocks TEXT,
         created_at INTEGER NOT NULL,
         FOREIGN KEY (ai_session_id) REFERENCES ai_sessions(id) ON DELETE CASCADE
@@ -66,6 +68,23 @@ export class AISessionManager {
     this.db.run(
       "CREATE INDEX IF NOT EXISTS idx_ai_messages_role ON ai_messages(ai_session_id, role)"
     );
+
+    this.migrateMessageSchema();
+  }
+
+  private migrateMessageSchema(): void {
+    try {
+      const columns = this.db.prepare("PRAGMA table_info(ai_messages)").all() as Array<{
+        name: string;
+      }>;
+      const hasReasoningContent = columns.some((column) => column.name === "reasoning_content");
+
+      if (!hasReasoningContent && columns.length > 0) {
+        this.db.run("ALTER TABLE ai_messages ADD COLUMN reasoning_content TEXT");
+      }
+    } catch (error) {
+      log("AI message schema migration error", { error: String(error) });
+    }
   }
 
   getSession(sessionId: string, provider: AIProviderType): AISession | null {
@@ -153,8 +172,8 @@ export class AISessionManager {
     this.db.run(
       `INSERT INTO ai_messages (
         ai_session_id, sequence, role, content, 
-        tool_calls, tool_call_id, content_blocks, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        tool_calls, tool_call_id, reasoning_content, content_blocks, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         message.aiSessionId,
         message.sequence,
@@ -162,6 +181,7 @@ export class AISessionManager {
         message.content,
         message.toolCalls ? JSON.stringify(message.toolCalls) : null,
         message.toolCallId || null,
+        message.reasoningContent ?? null,
         message.contentBlocks ? JSON.stringify(message.contentBlocks) : null,
         Date.now(),
       ]
@@ -212,6 +232,7 @@ export class AISessionManager {
       content: row.content,
       toolCalls: row.tool_calls ? JSON.parse(row.tool_calls) : undefined,
       toolCallId: row.tool_call_id,
+      reasoningContent: row.reasoning_content ?? undefined,
       contentBlocks: row.content_blocks ? JSON.parse(row.content_blocks) : undefined,
       createdAt: row.created_at,
     };

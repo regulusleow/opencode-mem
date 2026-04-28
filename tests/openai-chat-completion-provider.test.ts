@@ -18,7 +18,11 @@ const toolSchema: ChatCompletionTool = {
 
 class FakeSessionManager {
   private readonly session = { id: "session-1" };
-  private readonly messages: any[] = [];
+  private readonly messages: AIMessage[];
+
+  constructor(messages: AIMessage[] = []) {
+    this.messages = [...messages];
+  }
 
   getSession(): any {
     return null;
@@ -36,8 +40,8 @@ class FakeSessionManager {
     return this.messages.length - 1;
   }
 
-  addMessage(message: any): void {
-    this.messages.push(message);
+  addMessage(message: Omit<AIMessage, "id" | "createdAt">): void {
+    this.messages.push({ ...message, createdAt: Date.now() });
   }
 }
 
@@ -47,16 +51,16 @@ class TestableOpenAIChatCompletionProvider extends OpenAIChatCompletionProvider 
   }
 }
 
-function makeProvider(config: Record<string, unknown> = {}) {
+function makeProvider(config: Record<string, unknown> = {}, messages: AIMessage[] = []) {
   return new OpenAIChatCompletionProvider(
-    { model: "gpt-4o-mini", apiKey: "test-key", ...config },
-    new FakeSessionManager() as any
+    { model: "gpt-4o-mini", apiUrl: "https://api.openai.com/v1", apiKey: "test-key", ...config },
+    new FakeSessionManager(messages) as any
   );
 }
 
 function makeTestableProvider(config: Record<string, unknown> = {}) {
   return new TestableOpenAIChatCompletionProvider(
-    { model: "gpt-4o-mini", apiKey: "test-key", ...config },
+    { model: "gpt-4o-mini", apiUrl: "https://api.openai.com/v1", apiKey: "test-key", ...config },
     new FakeSessionManager() as any
   );
 }
@@ -391,6 +395,138 @@ describe("OpenAIChatCompletionProvider", () => {
 
     expect(result.success).toBe(true);
     expect(result.iterations).toBe(1);
+  });
+
+  it("passes assistant reasoning_content back on the next request", async () => {
+    const validArguments = JSON.stringify({
+      preferences: [],
+      patterns: [],
+      workflows: [],
+      codingStyle: {},
+      domainKnowledge: [],
+    });
+    const capturedBodies: Array<{
+      messages?: Array<{ role?: string; reasoning_content?: string }>;
+    }> = [];
+
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBodies.push(JSON.parse(String(init?.body ?? "{}")));
+
+      if (capturedBodies.length === 1) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  content: "I need to retry with a tool.",
+                  reasoning_content: "private reasoning trace",
+                },
+              },
+            ],
+          }),
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: null,
+                tool_calls: [
+                  {
+                    id: "call-1",
+                    type: "function",
+                    function: { name: "save_memories", arguments: validArguments },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      } as Response;
+    }) as typeof fetch;
+
+    const result = await makeProvider({
+      maxIterations: 2,
+      apiUrl: "https://api.deepseek.com/v1",
+    }).executeToolCall("system", "user", toolSchema, "session-id");
+
+    const secondRequestMessages = capturedBodies[1]?.messages ?? [];
+    const assistantMessage = secondRequestMessages.find((message) => message.role === "assistant");
+
+    expect(result.success).toBe(true);
+    expect(assistantMessage?.reasoning_content).toBe("private reasoning trace");
+  });
+
+  it("passes stored tool-call reasoning_content back on later requests", async () => {
+    const storedMessages: AIMessage[] = [
+      {
+        aiSessionId: "session-1",
+        sequence: 0,
+        role: "system",
+        content: "system",
+        createdAt: 1,
+      },
+      {
+        aiSessionId: "session-1",
+        sequence: 1,
+        role: "user",
+        content: "previous user",
+        createdAt: 2,
+      },
+      {
+        aiSessionId: "session-1",
+        sequence: 2,
+        role: "assistant",
+        content: "I need a tool.",
+        reasoningContent: "reasoning required for tool call",
+        toolCalls: [
+          {
+            id: "call-previous",
+            type: "function",
+            function: { name: "save_memories", arguments: "{}" },
+          },
+        ],
+        createdAt: 3,
+      },
+      {
+        aiSessionId: "session-1",
+        sequence: 3,
+        role: "tool",
+        content: '{"success":true}',
+        toolCallId: "call-previous",
+        createdAt: 4,
+      },
+    ];
+    let capturedBody: { messages?: Array<{ role?: string; reasoning_content?: string }> } = {};
+
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body ?? "{}"));
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({
+          choices: [{ message: { content: "I will not use a tool" } }],
+        }),
+      } as Response;
+    }) as typeof fetch;
+
+    await makeProvider(
+      { maxIterations: 1, apiUrl: "https://api.deepseek.com/v1" },
+      storedMessages
+    ).executeToolCall("system", "current user", toolSchema, "session-id");
+
+    const assistantMessage = capturedBody.messages?.find((message) => message.role === "assistant");
+
+    expect(assistantMessage?.reasoning_content).toBe("reasoning required for tool call");
   });
 
   it("returns success: false after max iterations with no tool call", async () => {
